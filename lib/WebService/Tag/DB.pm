@@ -38,14 +38,14 @@ sub new {
 	my $self = {};
 	bless $self, $class;
 	my $initresult = $self->_init( $conf );
-	die $initresult->{ fail } unless $initresult->{ pass };
+	die $initresult->{fail} unless $initresult->{pass};
 	return $self;
 }
 
 sub _init {
 	my ( $self, $conf ) = @_;
 
-	return { fail => "Non useful init" };
+	return {fail => "Non useful init"};
 }
 
 =head2
@@ -55,12 +55,12 @@ sub _init {
 sub configure {
 	my ( $self, $conf, $keys ) = @_;
 	$keys = [] unless $keys;
-	for ( @{ $keys } ) {
-		if ( exists( $conf->{ $_ } ) ) {
+	for ( @{$keys} ) {
+		if ( exists( $conf->{$_} ) ) {
 			if ( $self->can( $_ ) ) {
-				$self->$_( $conf->{ $_ } );
+				$self->$_( $conf->{$_} );
 			} else {
-				$self->{ $_ } = $conf->{ $_ };
+				$self->{$_} = $conf->{$_};
 			}
 		}
 	}
@@ -70,8 +70,8 @@ sub configure {
 
 =cut
 
-sub set_subject_2d_tags {
-	my ( $self, $subject_id, $tag_string ) = @_;
+sub set_subject_2d_tags_arref {
+	my ( $self, $subject_id, $arref, $params ) = @_;
 	die "not implemented";
 
 }

@@ -1,6 +1,7 @@
 use strict;
 
 package WebService::Tag::DB::DBI;
+use Module::Runtime;
 use 5.006;
 use warnings;
 use base qw(WebService::Tag::DB);
@@ -48,21 +49,23 @@ sub _init {
 		subject_3d_tag_ints
 		subject_3d_tag_strings
 		subject_has_2d
+		tag_delimiter
 		/
 	  )
 	{
-		push( @cache_names, "$_\_cache" );
+		push( @cache_names, "$_\_id_cache" );
 	}
 
-	my @accessors = ( qw/dbh  /, @cache_names );
+	my @accessors = ( qw/dbh  last_insert_sth tag_delimiter /, @cache_names );
 	__PACKAGE__->mk_accessors( @accessors );
 
 	$self->SUPER::configure( $conf, [@accessors] );
 	unless ( $self->dbh ) {
-		unless ( ref( $conf->{ dsn } ) eq 'ARRAY' ) {
-			return { fail => "No DBH and no DSN provided - can't connect to database" };
+		unless ( ref( $conf->{dsn} ) eq 'ARRAY' ) {
+			return {fail => "No DBH and no DSN provided - can't connect to database"};
 		}
-		my $dbh = DBI->connect( @{ $conf->{ dsn } } ) or die $DBI::errstr;
+		use DBI;
+		my $dbh = DBI->connect( @{$conf->{dsn}} ) or die $DBI::errstr;
 		$self->dbh( $dbh );
 	}
 
@@ -74,20 +77,82 @@ sub _init {
 		}
 	}
 
-	return { pass => 1 };
+	return {pass => 1};
 }
 
 sub clean_finish {
 	my ( $self ) = @_;
 	$self->_commit();
-	delete( $self->{ sths } );
+	delete( $self->{sths} );
 	$self->last_insert_sth( '' );
 	$self->dbh->disconnect();
 }
 
+sub find_or_create_subject {
+
+
+	my ( $self, $id ) = @_;
+
+	unless ( $self->{sths}->{find_subject_sth} ) {
+		$self->{sths}->{find_subject_sth} = $self->dbh->prepare( "select id from subjects where id = ?" ) or die $DBI::errstr;
+	}
+	$self->{sths}->{find_subject_sth}->execute($id);
+	if(my $row = $self->{sths}->{find_subject_sth}->fetchrow_arrayref){
+		return $id;
+	}
+	
+	
+	unless ( $self->{sths}->{new_subject_sth} ) {
+		$self->{sths}->{new_subject_sth} = $self->dbh->prepare( "insert into subjects values ()" ) or die $DBI::errstr;
+	}
+	$self->{sths}->{new_subject_sth}->execute();
+	return $self->last_insert
+
+}
+
+sub set_subject_2d_tags_string {
+	my ( $self, $subject_id, $tag_string ) = @_;
+	my @strings = split( $self->tag_delimiter(), $tag_string );
+	my @tag_ids;
+	for ( @strings ) {
+		push( @tag_ids, $self->get_2dtag_for_string( $_ ) );
+	}
+
+	for ( @tag_ids ) {
+
+	}
+}
+
+sub get_2dtag_for_string {
+	my ( $self, $value ) = @_;
+	my $v = $self->cached_value_id( '2d_tags', $value, );
+
+	#implies we need a new one
+	unless ( $v ) {
+		$v = $self->new_value_id( '2d_tags', $value );
+	}
+	return $v;
+}
+
+sub cached_value_id {
+	my ( $self, $table, $value, $cache ) = @_;
+	$cache ||= $self->_cache_id_name( $table );
+	my $v = $self->$cache->get( $value );
+	return $v if $v;
+
+	my $sth = $self->id_from_value_sth( $table );
+	$sth->execute( $value );
+	if ( my $row = $sth->fetchrow_hashref() ) {
+		$self->$cache->set( $value, $row->{id} );
+		return $row->{id};
+	}
+
+	return;
+}
+
 sub set_subject_2d_tags_arref {
 	my ( $self, $subject_id, $tag_arref ) = @_;
-	for my $tag_id ( @{ $tag_arref } ) {
+	for my $tag_id ( @{$tag_arref} ) {
 		next if ( $self->subject_has_2d( $tag_id ) );
 		$self->add_2d_tag_to_subject( $tag_id );
 		$self->remove_other_2d_tags_from_subject( $subject_id, $tag_arref );
@@ -112,21 +177,6 @@ sub cache_subject_2d_tags {
 	# TODO - ideally as a forked process , possibly using its own cache
 }
 
-sub cached_value_id {
-	my ( $self, $table, $value, $cache ) = @_;
-	$cache ||= $self->_cache_id_name( $table );
-	my $v = $self->$cache->get( $value );
-	return $v if $v;
-
-	my $sth = $self->id_from_value_sth( $table );
-	$sth->execute( $value );
-	if ( my $row = $sth->fetchrow_hashref() ) {
-		$self->$cache->set( $value, $row->{ id } );
-		return $row->{ id };
-	}
-	return;
-}
-
 sub new_value_id {
 	my ( $self, $table, $value, $cache ) = @_;
 	$cache ||= $self->_cache_id_name( $table );
@@ -149,7 +199,7 @@ sub last_insert {
 
 	$_[0]->last_insert_sth->execute();
 	if ( my $row = $_[0]->last_insert_sth->fetchrow_hashref() ) {
-		return $row->{ id };
+		return $row->{id};
 	} else {
 		die "failed to create new entry : $DBI::errstr";
 	}
@@ -173,24 +223,24 @@ sub _cache_id_name {
 sub id_from_value_sth {
 	my ( $self, $table ) = @_;
 
-	unless ( $self->{ sths }->{ id_from_value_sth }->{ $table } ) {
-		$self->{ sths }->{ id_from_value_sth }->{ $table } = $self->dbh->prepare( "select id from $table where value = ?" ) or die $DBI::errstr;
+	unless ( $self->{sths}->{id_from_value_sth}->{$table} ) {
+		$self->{sths}->{id_from_value_sth}->{$table} = $self->dbh->prepare( "select id from $table where value = ?" ) or die $DBI::errstr;
 	}
-	return $self->{ sths }->{ id_from_value_sth }->{ $table };
+	return $self->{sths}->{id_from_value_sth}->{$table};
 }
 
 sub new_id_from_value_sth {
 	my ( $self, $table ) = @_;
 
-	unless ( $self->{ sths }->{ new_id_from_value_sth }->{ $table } ) {
-		$self->{ sths }->{ new_id_from_value_sth }->{ $table } = $self->dbh->prepare( "insert into $table (value) values (?) " ) or die $DBI::errstr;
+	unless ( $self->{sths}->{new_id_from_value_sth}->{$table} ) {
+		$self->{sths}->{new_id_from_value_sth}->{$table} = $self->dbh->prepare( "insert into $table (value) values (?) " ) or die $DBI::errstr;
 	}
-	return $self->{ sths }->{ new_id_from_value_sth }->{ $table };
+	return $self->{sths}->{new_id_from_value_sth}->{$table};
 }
 
 sub _commit_maybe {
 	my ( $self, $counter, $limit ) = @_;
-	if ( $self->dbh->{ AutoCommit } == 0 ) {
+	if ( $self->dbh->{AutoCommit} == 0 ) {
 		$counter ||= $self->sth_write_counter;
 		$limit   ||= $self->sth_write_limit;
 		$$counter++;
@@ -204,7 +254,7 @@ sub _commit_maybe {
 
 sub _commit {
 	my ( $self, $counter ) = @_;
-	if ( $self->dbh->{ AutoCommit } == 0 ) {
+	if ( $self->dbh->{AutoCommit} == 0 ) {
 		$self->debug( " COMMIT " );
 		$self->dbh->commit();
 		$$counter = 0;
@@ -212,6 +262,9 @@ sub _commit {
 		return 1;
 	}
 	return 3;
+}
+
+sub debug {
 }
 
 # TODO this, properly
